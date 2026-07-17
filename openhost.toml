@@ -1,7 +1,7 @@
 [app]
 name = "hotmilk"
 version = "0.1.0"
-description = "Tabbed web terminals preloaded with Pi coding agent and hotmilk meta-package, for building and debugging openhost apps."
+description = "Tabbed web terminals preloaded with Pi coding agent + hotmilk (github.com/dayjobdoor/hotmilk) meta-package — a browser ttyd for building/debugging openhost apps."
 
 [runtime.container]
 image = "Dockerfile"
