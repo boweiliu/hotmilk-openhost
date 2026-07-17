@@ -70,6 +70,35 @@ with open('$PI_SETTINGS', 'w') as f:
     fi
 fi
 
+# Seed hotmilk.json with defaults if it doesn't exist, so pi loads all
+# bundled extensions on first run (hotmilk would create this on first pi
+# session, but pre-seeding prevents a crash-loop if pi exits before writing).
+HOTMILK_JSON="$HOME/.pi/agent/hotmilk.json"
+if [ ! -f "$HOTMILK_JSON" ]; then
+    echo "[entrypoint] seeding hotmilk.json with defaults ..."
+    python3 -c '
+import json
+cfg = {
+    "extensions": {
+        "skill-registry": True, "sdd-init": False, "gentle-ai": True,
+        "context-mode": True, "ask-user": True, "graphify": True,
+        "shazam": False, "subagents": True, "pi-actors": False,
+        "goal": True, "docparser": True, "obsidian": True, "btw": True,
+        "simplify": True, "rtk-optimizer": False, "observational-memory": False,
+        "mcp-adapter": False, "planning-with-files": False, "plannotator": False,
+        "caveman": False, "red-green": False, "autoresearch": False,
+        "agent-dashboard": False, "web-access": False, "pi-flows": False,
+        "kanagawa": False, "tetris": False
+    },
+    "projectTrust": {"mode": "always"}
+}
+import os
+with open(os.environ["HOTMILK_JSON"], "w") as f:
+    json.dump(cfg, f, indent=2)
+'
+    echo "[entrypoint] hotmilk.json seeded"
+fi
+
 # ── Fetch API keys from openhost secrets ────────────────────────────────────
 _fetch_secret() {
     local key="$1"
