@@ -10,8 +10,11 @@ if [ -n "${OPENHOST_APP_DATA_DIR:-}" ]; then
     cd "$HOME"
 fi
 
-# Ensure system bin and pi path are on PATH
+# Ensure system bin and pi path are on PATH.
+# Set NODE_PATH so pi can find globally installed packages regardless
+# of which npm prefix they were installed to.
 export PATH="/usr/local/bin:$PATH"
+export NODE_PATH="$(npm root -g):${NODE_PATH:-}"
 
 # ── Verify pi is available ──────────────────────────────────────────────────
 PI_BIN="$(command -v pi 2>/dev/null || true)"
@@ -30,10 +33,10 @@ else
     echo "[entrypoint] WARN: pi not found on PATH — you may need to install it manually."
 fi
 
-# ── Install hotmilk (use system npm prefix, not a custom one) ─────────────
-# pi is at /usr/bin/pi (system npm). hotmilk must be installed to the same
-# global prefix so pi can find it at startup. We register it in pi's
-# settings.json manually since pi install runs interactively.
+# ── Install hotmilk ───────────────────────────────────────────────────────
+# NODE_PATH (set above) lets pi find packages in any npm prefix. We keep
+# the existing user npm prefix for installs, which survives redeploys
+# since HOME is on persistent storage.
 NPM_GLOBAL="$(npm root -g)"
 echo "[entrypoint] npm global prefix: $NPM_GLOBAL"
 

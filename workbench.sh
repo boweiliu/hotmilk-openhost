@@ -19,6 +19,16 @@ for d in /opt/venv/bin /usr/local/bin /usr/sbin /sbin; do
 done
 export PATH
 
+# Help pi find globally installed npm packages (hotmilk, etc.)
+# regardless of which npm prefix they live in.
+NPM_ROOT="$(npm root -g 2>/dev/null || echo '')"
+if [ -n "$NPM_ROOT" ]; then
+    case ":$NODE_PATH:" in
+        *":$NPM_ROOT:"*) ;;
+        *) export NODE_PATH="$NPM_ROOT:${NODE_PATH:-}" ;;
+    esac
+fi
+
 # Everything below is interactive-only.
 case $- in *i*) ;; *) return;; esac
 
