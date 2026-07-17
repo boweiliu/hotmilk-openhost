@@ -3,6 +3,7 @@
 Routes:
     GET  /                         -> tabbed terminal UI
     GET  /health                   -> health check
+    GET  /diag                     -> diagnostic: pi PATH, hotmilk settings, secrets status
     GET  /terminal/ws              -> WebSocket PTY (one session per connection)
 """
 
@@ -13,6 +14,7 @@ import fcntl
 import json
 import os
 import pty
+import shutil
 import signal
 import struct
 import subprocess
@@ -32,10 +34,12 @@ SECRETS_SHORTNAME = "secrets"
 
 app = Quart(__name__, template_folder=str(APP_DIR / "templates"), static_folder=str(APP_DIR / "static"))
 
-# Cached OPENROUTER_API_KEY value, fetched lazily from the secrets app on first
-# PTY launch. `None` means "not yet fetched"; "" means "tried, not available".
-_openrouter_key: str | None = None
-_openrouter_lock = asyncio.Lock()
+# Cached secrets, fetched lazily on first PTY launch.
+# None = not fetched yet; "" = tried, not available.
+_secrets_cache: dict[str, str] | None = None
+_secrets_lock = asyncio.Lock()
+
+SECRET_KEYS = ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"]
 
 
 async def _fetch_secrets(keys: list[str]) -> dict[str, str]:
@@ -57,31 +61,92 @@ async def _fetch_secrets(keys: list[str]) -> dict[str, str]:
         return {}
 
 
-async def _fetch_openrouter_key() -> str:
-    """Ask the secrets-v2 app for OPENROUTER_API_KEY. Returns "" if unavailable."""
-    return (await _fetch_secrets(["OPENROUTER_API_KEY"])).get("OPENROUTER_API_KEY", "")
+async def _get_all_secrets() -> dict[str, str]:
+    """Return cached secrets, fetching once if needed."""
+    global _secrets_cache
+    if _secrets_cache is not None:
+        return _secrets_cache
+    async with _secrets_lock:
+        if _secrets_cache is not None:
+            return _secrets_cache
+        _secrets_cache = await _fetch_secrets(SECRET_KEYS)
+        return _secrets_cache
 
 
-async def _get_openrouter_key() -> str:
-    """Return the cached key, fetching once if we haven't yet."""
-    global _openrouter_key
-    if _openrouter_key is not None:
-        return _openrouter_key
-    async with _openrouter_lock:
-        if _openrouter_key is not None:
-            return _openrouter_key
-        key = await _fetch_openrouter_key()
-        _openrouter_key = key
-        return key
+def _find_pi() -> str | None:
+    """Locate the `pi` binary. Returns path or None."""
+    pi = shutil.which("pi")
+    if pi:
+        return pi
+    # Check common locations
+    for d in ["/usr/local/bin", "/usr/bin", "/root/.npm-global/bin"]:
+        p = Path(d) / "pi"
+        if p.exists():
+            return str(p)
+    return None
 
 
-def _set_winsize(fd: int, rows: int, cols: int) -> None:
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+def _check_hotmilk_settings() -> dict:
+    """Check if hotmilk settings are in place."""
+    hotmilk_json = HOME / ".pi" / "agent" / "hotmilk.json"
+    pi_settings = HOME / ".pi" / "agent" / "settings.json"
+    result: dict = {"hotmilk_json": str(hotmilk_json)}
+    if hotmilk_json.exists():
+        result["hotmilk_json_exists"] = True
+        result["hotmilk_json_size"] = hotmilk_json.stat().st_size
+        try:
+            cfg = json.loads(hotmilk_json.read_text())
+            result["extensions_enabled"] = {
+                k: v
+                for k, v in cfg.get("extensions", {}).items()
+                if v is True
+            }
+            result["extensions_count"] = len(result["extensions_enabled"])
+        except Exception as e:
+            result["hotmilk_json_error"] = str(e)
+    else:
+        result["hotmilk_json_exists"] = False
+    result["pi_settings"] = str(pi_settings)
+    result["pi_settings_exists"] = pi_settings.exists()
+    return result
+
+
+# ── Routes ──────────────────────────────────────────────────────────────────
 
 
 @app.get("/health")
 async def health() -> tuple[dict, int]:
     return {"status": "ok"}, 200
+
+
+@app.get("/diag")
+async def diag() -> tuple[dict, int]:
+    """Diagnostic endpoint: check pi, hotmilk, and secrets."""
+    pi_path = _find_pi()
+    pi_version = ""
+    if pi_path:
+        try:
+            r = subprocess.run([pi_path, "--version"], capture_output=True, text=True, timeout=5)
+            pi_version = r.stdout.strip() or r.stderr.strip()
+        except Exception as e:
+            pi_version = f"error: {e}"
+
+    secrets = await _get_all_secrets()
+    return {
+        "pi": {
+            "found": pi_path is not None,
+            "path": pi_path,
+            "version": pi_version,
+        },
+        "hotmilk": _check_hotmilk_settings(),
+        "secrets": {
+            "router_available": bool(ROUTER_URL),
+            "keys_configured": [k for k in SECRET_KEYS if secrets.get(k)],
+            "keys_missing": [k for k in SECRET_KEYS if not secrets.get(k)],
+        },
+        "home": str(HOME),
+        "my_project": str(MY_PROJECT_DIR),
+    }, 200
 
 
 @app.get("/")
@@ -91,18 +156,22 @@ async def index() -> object:
 
 @app.websocket("/terminal/ws")
 async def terminal_ws() -> None:
-    # Pre-populate OPENROUTER_API_KEY from the secrets app if available.
-    extra_env: dict[str, str] = {}
-    key = await _get_openrouter_key()
-    if key:
-        extra_env["OPENROUTER_API_KEY"] = key
+    # Pre-populate API keys from the secrets app if available.
+    secrets = await _get_all_secrets()
+    extra_env: dict[str, str] = {k: v for k, v in secrets.items() if v}
 
     command = ["bash", "-l"]
     cwd = str(MY_PROJECT_DIR) if MY_PROJECT_DIR.exists() else str(HOME)
-    await _bridge_pty(command=command, cwd=cwd, extra_env=extra_env)
+    await _bridge_pty(command=command, cwd=cwd, extra_env=extra_env, stdin_seed="pi\n")
 
 
-async def _bridge_pty(*, command: list[str], cwd: str | None, extra_env: dict[str, str] | None = None) -> None:
+async def _bridge_pty(
+    *,
+    command: list[str],
+    cwd: str | None,
+    extra_env: dict[str, str] | None = None,
+    stdin_seed: str = "",
+) -> None:
     master_fd, slave_fd = pty.openpty()
     _set_winsize(master_fd, 24, 80)
 
@@ -117,6 +186,17 @@ async def _bridge_pty(*, command: list[str], cwd: str | None, extra_env: dict[st
         preexec_fn=os.setsid,
     )
     os.close(slave_fd)
+
+    if stdin_seed:
+        # Give bash a moment to set up its TTY before we feed input.
+        async def _seed() -> None:
+            await asyncio.sleep(0.5)
+            try:
+                os.write(master_fd, stdin_seed.encode())
+            except OSError:
+                pass
+
+        asyncio.create_task(_seed())
 
     loop = asyncio.get_event_loop()
 
@@ -172,6 +252,10 @@ async def _bridge_pty(*, command: list[str], cwd: str | None, extra_env: dict[st
             t.cancel()
     finally:
         cleanup()
+
+
+def _set_winsize(fd: int, rows: int, cols: int) -> None:
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
 async def _serve() -> None:

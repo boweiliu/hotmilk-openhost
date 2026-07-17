@@ -10,44 +10,69 @@ if [ -n "${OPENHOST_APP_DATA_DIR:-}" ]; then
     cd "$HOME"
 fi
 
-# Ensure npm global bin is on PATH
-export PATH="$HOME/.npm-global/bin:$PATH"
+# Ensure npm global bin and system bin are on PATH
+export PATH="$HOME/.npm-global/bin:/usr/local/bin:$PATH"
 
-# Install hotmilk globally if not already present
+# ── Verify pi is available ──────────────────────────────────────────────────
+PI_BIN="$(command -v pi 2>/dev/null || true)"
+if [ -z "$PI_BIN" ]; then
+    # Try common locations
+    for d in /usr/local/bin /usr/bin "$HOME/.npm-global/bin"; do
+        if [ -x "$d/pi" ]; then
+            PI_BIN="$d/pi"
+            break
+        fi
+    done
+fi
+if [ -n "$PI_BIN" ]; then
+    echo "[entrypoint] pi found at $PI_BIN"
+else
+    echo "[entrypoint] WARN: pi not found on PATH — you may need to install it manually."
+fi
+
+# ── Install hotmilk globally if not already present ─────────────────────────
 if [ ! -d "$HOME/.npm-global/lib/node_modules/hotmilk" ]; then
     echo "[entrypoint] installing hotmilk ..."
     mkdir -p "$HOME/.npm-global"
     npm config set prefix "$HOME/.npm-global"
     npm install -g hotmilk@latest || echo "[entrypoint] WARN: hotmilk install failed; you can install manually later."
+    echo "[entrypoint] hotmilk installed"
+else
+    echo "[entrypoint] hotmilk already installed"
 fi
 
-# Pre-populate OPENROUTER_API_KEY from the secrets app if available.
-# The server also does this per-PTY, but seeding it here ensures it's
-# in the environment before the server process starts (useful for any
-# subprocesses that inherit the env).
-if [ -n "${OPENHOST_ROUTER_URL:-}" ] && [ -n "${OPENHOST_APP_TOKEN:-}" ]; then
-    echo "[entrypoint] fetching OPENROUTER_API_KEY from secrets app ..."
-    KEY_RESP="$(python3 -c "
+# ── Fetch API keys from openhost secrets ────────────────────────────────────
+_fetch_secret() {
+    local key="$1"
+    if [ -z "${OPENHOST_ROUTER_URL:-}" ] || [ -z "${OPENHOST_APP_TOKEN:-}" ]; then
+        return 1
+    fi
+    python3 -c "
 import httpx, os, json
 url = f'{os.environ[\"OPENHOST_ROUTER_URL\"]}/api/services/v2/call/secrets/get'
 try:
-    resp = httpx.post(url, json={'keys': ['OPENROUTER_API_KEY']},
+    resp = httpx.post(url, json={'keys': ['$key']},
                       headers={'Authorization': f'Bearer {os.environ[\"OPENHOST_APP_TOKEN\"]}'},
                       timeout=5)
     if resp.status_code == 200:
         data = resp.json()
-        key = (data.get('secrets') or {}).get('OPENROUTER_API_KEY', '')
-        print(key)
+        val = (data.get('secrets') or {}).get('$key', '')
+        if val:
+            print(val)
 except Exception:
     pass
-" 2>/dev/null || true)"
-    if [ -n "$KEY_RESP" ]; then
-        export OPENROUTER_API_KEY="$KEY_RESP"
-        echo "[entrypoint] OPENROUTER_API_KEY loaded from secrets"
-    fi
-fi
+" 2>/dev/null
+}
 
-# Create a convenience my_project dir
+for key in OPENROUTER_API_KEY ANTHROPIC_API_KEY; do
+    val="$(_fetch_secret "$key" || true)"
+    if [ -n "$val" ]; then
+        export "$key=$val"
+        echo "[entrypoint] $key loaded from secrets"
+    fi
+done
+
+# ── Create convenience dir ──────────────────────────────────────────────────
 mkdir -p "$HOME/my_project"
 
 exec python3 /app/server.py

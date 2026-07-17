@@ -7,8 +7,11 @@ if [ -n "${_HOTMILK_RC_LOADED:-}" ]; then
 fi
 _HOTMILK_RC_LOADED=1
 
-# Ensure npm global bin and the Python venv are on PATH
-for d in "$HOME/.npm-global/bin" /opt/venv/bin /usr/sbin /sbin; do
+# `bash -l` sources /etc/profile, which resets PATH to the system default and
+# drops the additions baked in via Dockerfile `ENV PATH=...`. Re-add all needed
+# paths so `pi` (~/.npm-global/bin or /usr/local/bin) and the Python venv
+# (/opt/venv/bin) are reachable in every new tab.
+for d in "$HOME/.npm-global/bin" /opt/venv/bin /usr/local/bin /usr/sbin /sbin; do
     case ":$PATH:" in
         *":$d:"*) ;;
         *) PATH="$d:$PATH" ;;
@@ -43,7 +46,18 @@ alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'
 
-# Interactive login banner
-if [ -f "/etc/profile.d/hotmilk-banner" ]; then
-    cat /etc/profile.d/hotmilk-banner
+# ── Interactive login banner ──────────────────────────────────────────────
+echo
+echo "  🥛  hotmilk on openhost"
+echo "  ─────────────────────"
+echo "  pi       $(command -v pi 2>/dev/null || echo '(not found)')"
+echo "  hotmilk  $([ -f "$HOME/.pi/agent/hotmilk.json" ] && echo 'installed' || echo '(install on first pi run)')"
+if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+    echo "  OPENROUTER_API_KEY  configured"
 fi
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "  ANTHROPIC_API_KEY   configured"
+fi
+echo "  ─────────────────────"
+echo "  Type 'pi' to start the coding agent."
+echo
