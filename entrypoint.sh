@@ -41,6 +41,30 @@ else
     echo "[entrypoint] hotmilk already installed"
 fi
 
+# Register hotmilk in pi settings so pi loads it on startup.
+# pi reads ~/.pi/agent/settings.json for the packages list.
+PI_SETTINGS="$HOME/.pi/agent/settings.json"
+mkdir -p "$(dirname "$PI_SETTINGS")"
+if [ ! -f "$PI_SETTINGS" ]; then
+    echo '{"packages": ["npm:hotmilk"]}' > "$PI_SETTINGS"
+    echo "[entrypoint] pi settings created with hotmilk package"
+else
+    # Ensure hotmilk is in the packages list
+    if ! python3 -c "import json; pkgs = json.load(open('$PI_SETTINGS')).get('packages', []); exit(0 if 'npm:hotmilk' in pkgs else 1)" 2>/dev/null; then
+        python3 -c "
+import json
+with open('$PI_SETTINGS') as f:
+    cfg = json.load(f)
+cfg.setdefault('packages', [])
+if 'npm:hotmilk' not in cfg['packages']:
+    cfg['packages'].append('npm:hotmilk')
+with open('$PI_SETTINGS', 'w') as f:
+    json.dump(cfg, f, indent=2)
+" 2>/dev/null
+        echo "[entrypoint] hotmilk added to pi settings packages"
+    fi
+fi
+
 # ── Fetch API keys from openhost secrets ────────────────────────────────────
 _fetch_secret() {
     local key="$1"

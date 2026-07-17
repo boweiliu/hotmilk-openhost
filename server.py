@@ -108,6 +108,11 @@ def _check_hotmilk_settings() -> dict:
         result["hotmilk_json_exists"] = False
     result["pi_settings"] = str(pi_settings)
     result["pi_settings_exists"] = pi_settings.exists()
+    if pi_settings.exists():
+        try:
+            result["pi_settings_content"] = json.loads(pi_settings.read_text())
+        except Exception as e:
+            result["pi_settings_error"] = str(e)
     return result
 
 
