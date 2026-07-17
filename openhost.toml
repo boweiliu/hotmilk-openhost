@@ -1,0 +1,20 @@
+[app]
+name = "hotmilk"
+version = "0.1.0"
+description = "Tabbed web terminals preloaded with Pi coding agent and hotmilk meta-package, for building and debugging openhost apps."
+
+[runtime.container]
+image = "Dockerfile"
+port = 5000
+
+[routing]
+health_check = "/health"
+
+[resources]
+memory_mb = 1024
+cpu_millicores = 1000
+
+# Persistent home directory survives redeploys, so pi config, shell history,
+# etc. all stick around across updates.
+[data]
+app_data = true
