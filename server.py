@@ -124,6 +124,16 @@ async def health() -> tuple[dict, int]:
     return {"status": "ok"}, 200
 
 
+@app.post("/reset")
+async def reset_hotmilk() -> tuple[dict, int]:
+    """Delete hotmilk.json so entrypoint reseeds defaults on next restart."""
+    hotmilk_json = HOME / ".pi" / "agent" / "hotmilk.json"
+    existed = hotmilk_json.exists()
+    if existed:
+        hotmilk_json.unlink()
+    return {"deleted": existed, "restart_to_reseed": True}, 200
+
+
 @app.get("/diag")
 async def diag() -> tuple[dict, int]:
     """Diagnostic endpoint: check pi, hotmilk, and secrets."""
