@@ -11,7 +11,7 @@ _HOTMILK_RC_LOADED=1
 # drops the additions baked in via Dockerfile `ENV PATH=...`. Re-add all needed
 # paths so `pi` (~/.npm-global/bin or /usr/local/bin) and the Python venv
 # (/opt/venv/bin) are reachable in every new tab.
-for d in "$HOME/.npm-global/bin" /opt/venv/bin /usr/local/bin /usr/sbin /sbin; do
+for d in /opt/venv/bin /usr/local/bin /usr/sbin /sbin; do
     case ":$PATH:" in
         *":$d:"*) ;;
         *) PATH="$d:$PATH" ;;

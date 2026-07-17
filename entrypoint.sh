@@ -10,8 +10,8 @@ if [ -n "${OPENHOST_APP_DATA_DIR:-}" ]; then
     cd "$HOME"
 fi
 
-# Ensure npm global bin and system bin are on PATH
-export PATH="$HOME/.npm-global/bin:/usr/local/bin:$PATH"
+# Ensure system bin and pi path are on PATH
+export PATH="/usr/local/bin:$PATH"
 
 # ── Verify pi is available ──────────────────────────────────────────────────
 PI_BIN="$(command -v pi 2>/dev/null || true)"
@@ -30,26 +30,28 @@ else
     echo "[entrypoint] WARN: pi not found on PATH — you may need to install it manually."
 fi
 
-# ── Install hotmilk globally if not already present ─────────────────────────
-if [ ! -d "$HOME/.npm-global/lib/node_modules/hotmilk" ]; then
-    echo "[entrypoint] installing hotmilk ..."
-    mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global"
-    npm install -g hotmilk@latest || echo "[entrypoint] WARN: hotmilk install failed; you can install manually later."
-    echo "[entrypoint] hotmilk installed"
+# ── Install hotmilk (use system npm prefix, not a custom one) ─────────────
+# pi is at /usr/bin/pi (system npm). hotmilk must be installed to the same
+# global prefix so pi can find it at startup. We register it in pi's
+# settings.json manually since pi install runs interactively.
+NPM_GLOBAL="$(npm root -g)"
+echo "[entrypoint] npm global prefix: $NPM_GLOBAL"
+
+if [ ! -d "$NPM_GLOBAL/hotmilk" ]; then
+    echo "[entrypoint] installing hotmilk to system global ..."
+    npm install -g hotmilk@latest || echo "[entrypoint] WARN: hotmilk install failed"
+    echo "[entrypoint] hotmilk installed to $NPM_GLOBAL/hotmilk"
 else
-    echo "[entrypoint] hotmilk already installed"
+    echo "[entrypoint] hotmilk already installed at $NPM_GLOBAL/hotmilk"
 fi
 
 # Register hotmilk in pi settings so pi loads it on startup.
-# pi reads ~/.pi/agent/settings.json for the packages list.
 PI_SETTINGS="$HOME/.pi/agent/settings.json"
 mkdir -p "$(dirname "$PI_SETTINGS")"
 if [ ! -f "$PI_SETTINGS" ]; then
     echo '{"packages": ["npm:hotmilk"]}' > "$PI_SETTINGS"
     echo "[entrypoint] pi settings created with hotmilk package"
 else
-    # Ensure hotmilk is in the packages list
     if ! python3 -c "import json; pkgs = json.load(open('$PI_SETTINGS')).get('packages', []); exit(0 if 'npm:hotmilk' in pkgs else 1)" 2>/dev/null; then
         python3 -c "
 import json
