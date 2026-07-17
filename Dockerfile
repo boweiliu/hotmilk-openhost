@@ -28,8 +28,10 @@ RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir 'quart>=0.19' 'hypercorn>=0.16' 'httpx>=0.27'
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Pi coding agent globally
-RUN npm install -g @earendil-works/pi-coding-agent
+# Install Pi coding agent globally — pin to 0.80.6 which hotmilk targets.
+# 0.80.10 has a read-only ES module export that breaks hotmilk's
+# createAgentSession hook.
+RUN npm install -g @earendil-works/pi-coding-agent@0.80.6
 
 # Run as root inside the container. openhost launches containers under rootless
 # podman with --cap-drop=ALL and --security-opt=no-new-privileges, so "root"
