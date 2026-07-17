@@ -21,6 +21,32 @@ if [ ! -d "$HOME/.npm-global/lib/node_modules/hotmilk" ]; then
     npm install -g hotmilk@latest || echo "[entrypoint] WARN: hotmilk install failed; you can install manually later."
 fi
 
+# Pre-populate OPENROUTER_API_KEY from the secrets app if available.
+# The server also does this per-PTY, but seeding it here ensures it's
+# in the environment before the server process starts (useful for any
+# subprocesses that inherit the env).
+if [ -n "${OPENHOST_ROUTER_URL:-}" ] && [ -n "${OPENHOST_APP_TOKEN:-}" ]; then
+    echo "[entrypoint] fetching OPENROUTER_API_KEY from secrets app ..."
+    KEY_RESP="$(python3 -c "
+import httpx, os, json
+url = f'{os.environ[\"OPENHOST_ROUTER_URL\"]}/api/services/v2/call/secrets/get'
+try:
+    resp = httpx.post(url, json={'keys': ['OPENROUTER_API_KEY']},
+                      headers={'Authorization': f'Bearer {os.environ[\"OPENHOST_APP_TOKEN\"]}'},
+                      timeout=5)
+    if resp.status_code == 200:
+        data = resp.json()
+        key = (data.get('secrets') or {}).get('OPENROUTER_API_KEY', '')
+        print(key)
+except Exception:
+    pass
+" 2>/dev/null || true)"
+    if [ -n "$KEY_RESP" ]; then
+        export OPENROUTER_API_KEY="$KEY_RESP"
+        echo "[entrypoint] OPENROUTER_API_KEY loaded from secrets"
+    fi
+fi
+
 # Create a convenience my_project dir
 mkdir -p "$HOME/my_project"
 

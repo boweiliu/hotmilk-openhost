@@ -19,13 +19,60 @@ import subprocess
 import termios
 from pathlib import Path
 
+import httpx
 from quart import Quart, jsonify, send_from_directory, websocket
 
 APP_DIR = Path(__file__).parent
 HOME = Path(os.environ.get("HOME", "/root"))
 MY_PROJECT_DIR = HOME / "my_project"
 
+ROUTER_URL = os.environ.get("OPENHOST_ROUTER_URL", "")
+APP_TOKEN = os.environ.get("OPENHOST_APP_TOKEN", "")
+SECRETS_SHORTNAME = "secrets"
+
 app = Quart(__name__, template_folder=str(APP_DIR / "templates"), static_folder=str(APP_DIR / "static"))
+
+# Cached OPENROUTER_API_KEY value, fetched lazily from the secrets app on first
+# PTY launch. `None` means "not yet fetched"; "" means "tried, not available".
+_openrouter_key: str | None = None
+_openrouter_lock = asyncio.Lock()
+
+
+async def _fetch_secrets(keys: list[str]) -> dict[str, str]:
+    """Ask the secrets-v2 app for the given keys. Returns {} if unavailable."""
+    if not ROUTER_URL or not APP_TOKEN:
+        return {}
+    url = f"{ROUTER_URL}/api/services/v2/call/{SECRETS_SHORTNAME}/get"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                url,
+                json={"keys": keys},
+                headers={"Authorization": f"Bearer {APP_TOKEN}"},
+            )
+        if resp.status_code != 200:
+            return {}
+        return {k: v for k, v in (resp.json().get("secrets") or {}).items() if v}
+    except Exception:
+        return {}
+
+
+async def _fetch_openrouter_key() -> str:
+    """Ask the secrets-v2 app for OPENROUTER_API_KEY. Returns "" if unavailable."""
+    return (await _fetch_secrets(["OPENROUTER_API_KEY"])).get("OPENROUTER_API_KEY", "")
+
+
+async def _get_openrouter_key() -> str:
+    """Return the cached key, fetching once if we haven't yet."""
+    global _openrouter_key
+    if _openrouter_key is not None:
+        return _openrouter_key
+    async with _openrouter_lock:
+        if _openrouter_key is not None:
+            return _openrouter_key
+        key = await _fetch_openrouter_key()
+        _openrouter_key = key
+        return key
 
 
 def _set_winsize(fd: int, rows: int, cols: int) -> None:
@@ -44,16 +91,22 @@ async def index() -> object:
 
 @app.websocket("/terminal/ws")
 async def terminal_ws() -> None:
+    # Pre-populate OPENROUTER_API_KEY from the secrets app if available.
+    extra_env: dict[str, str] = {}
+    key = await _get_openrouter_key()
+    if key:
+        extra_env["OPENROUTER_API_KEY"] = key
+
     command = ["bash", "-l"]
     cwd = str(MY_PROJECT_DIR) if MY_PROJECT_DIR.exists() else str(HOME)
-    await _bridge_pty(command=command, cwd=cwd)
+    await _bridge_pty(command=command, cwd=cwd, extra_env=extra_env)
 
 
-async def _bridge_pty(*, command: list[str], cwd: str | None) -> None:
+async def _bridge_pty(*, command: list[str], cwd: str | None, extra_env: dict[str, str] | None = None) -> None:
     master_fd, slave_fd = pty.openpty()
     _set_winsize(master_fd, 24, 80)
 
-    env = {**os.environ, "TERM": "xterm-256color"}
+    env = {**os.environ, "TERM": "xterm-256color", **(extra_env or {})}
     proc = subprocess.Popen(  # noqa: S603
         command,
         stdin=slave_fd,
